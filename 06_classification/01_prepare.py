@@ -9,7 +9,7 @@ CLS_1 = 'horse'
 CLS_2 = 'lion'
 TRAIN_RATIO = 0.7
 VALID_RATIO = 0.2
-DATA_DIR = r'./images'
+DATA_DIR = r'./06_classification/images'
 
 raw_no_of_files = {}
 classes = [CLS_1, CLS_2]
