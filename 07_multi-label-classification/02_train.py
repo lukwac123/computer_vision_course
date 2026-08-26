@@ -1,9 +1,12 @@
 from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.model_selection import train_test_split
 from datetime import datetime
+
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
 from imutils import paths
+
 import numpy as np
 import pandas as pd
 import argparse
@@ -11,50 +14,73 @@ import pickle
 import cv2
 import os
 
-# suppress logs
+
+# ---------------------------------------------------------
+# Ograniczenie komunikatów TensorFlow / Keras
+# ---------------------------------------------------------
+
 import warnings
+
 warnings.filterwarnings("ignore", category=FutureWarning)
+
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
+
+# ---------------------------------------------------------
+# Keras
+# ---------------------------------------------------------
+
 import keras
+
 from keras.callbacks import ModelCheckpoint
 from keras.optimizers import Adam
 
 from architecture import models
 
 
+# ---------------------------------------------------------
+# Wykres historii treningu
+# ---------------------------------------------------------
+
 def plot_hist(history, filename):
+
     hist = pd.DataFrame(history.history)
     hist["epoch"] = history.epoch
 
     fig = make_subplots(
         rows=2,
         cols=1,
-        subplot_titles=("Accuracy", "Loss")
+        subplot_titles=(
+            "Binary Accuracy",
+            "Loss"
+        )
     )
 
+    # Accuracy - trening
     fig.add_trace(
         go.Scatter(
             x=hist["epoch"],
-            y=hist["accuracy"],
-            name="train_accuracy",
+            y=hist["binary_accuracy"],
+            name="train_binary_accuracy",
             mode="markers+lines"
         ),
         row=1,
         col=1
     )
 
+    # Accuracy - walidacja
     fig.add_trace(
         go.Scatter(
             x=hist["epoch"],
-            y=hist["val_accuracy"],
-            name="valid_accuracy",
+            y=hist["val_binary_accuracy"],
+            name="valid_binary_accuracy",
             mode="markers+lines"
         ),
         row=1,
         col=1
     )
 
+    # Loss - trening
     fig.add_trace(
         go.Scatter(
             x=hist["epoch"],
@@ -66,6 +92,7 @@ def plot_hist(history, filename):
         col=1
     )
 
+    # Loss - walidacja
     fig.add_trace(
         go.Scatter(
             x=hist["epoch"],
@@ -77,115 +104,293 @@ def plot_hist(history, filename):
         col=1
     )
 
-    fig.update_xaxes(title_text="Liczba epok", row=1, col=1)
-    fig.update_xaxes(title_text="Liczba epok", row=2, col=1)
-    fig.update_yaxes(title_text="Accuracy", row=1, col=1)
-    fig.update_yaxes(title_text="Loss", row=2, col=1)
+    fig.update_xaxes(
+        title_text="Liczba epok",
+        row=1,
+        col=1
+    )
+
+    fig.update_xaxes(
+        title_text="Liczba epok",
+        row=2,
+        col=1
+    )
+
+    fig.update_yaxes(
+        title_text="Binary Accuracy",
+        row=1,
+        col=1
+    )
+
+    fig.update_yaxes(
+        title_text="Loss",
+        row=2,
+        col=1
+    )
 
     fig.update_layout(
         width=1400,
         height=1000,
-        title="Metrics"
+        title="Training Metrics"
     )
 
     fig.write_html(filename)
 
 
+# ---------------------------------------------------------
+# Seed - powtarzalność wyników
+# ---------------------------------------------------------
+
 np.random.seed(10)
+keras.utils.set_random_seed(10)
+
+
+# ---------------------------------------------------------
+# Argumenty programu
+# ---------------------------------------------------------
 
 ap = argparse.ArgumentParser()
+
 ap.add_argument(
     "-i",
     "--images",
     required=True,
-    help="path to the data"
+    help="ścieżka do katalogu z obrazami"
 )
+
 ap.add_argument(
     "-e",
     "--epochs",
     default=1,
     type=int,
-    help="number of epochs"
+    help="liczba epok"
 )
 
 args = vars(ap.parse_args())
 
-# Parametry
+
+# ---------------------------------------------------------
+# Parametry treningu
+# ---------------------------------------------------------
+
 EPOCHS = args["epochs"]
+
 LEARNING_RATE = 0.001
+
 BATCH_SIZE = 32
-INPUT_SHAPE = (150, 150, 3)
 
-os.makedirs("output", exist_ok=True)
+INPUT_SHAPE = (
+    150,
+    150,
+    3
+)
 
+
+# ---------------------------------------------------------
+# Katalog wyjściowy
+# ---------------------------------------------------------
+
+os.makedirs(
+    "output",
+    exist_ok=True
+)
+
+
+# ---------------------------------------------------------
 # Wczytywanie danych
+# ---------------------------------------------------------
+
 print("[INFO] Wczytywanie danych...")
 
-image_paths = list(paths.list_images(args["images"]))
-np.random.shuffle(image_paths)
+
+image_paths = list(
+    paths.list_images(
+        args["images"]
+    )
+)
+
+
+if len(image_paths) == 0:
+    raise ValueError(
+        f"Nie znaleziono obrazów w katalogu: {args['images']}"
+    )
+
+
+np.random.shuffle(
+    image_paths
+)
+
 
 data = []
 labels = []
 
+
 for image_path in image_paths:
 
-    image = cv2.imread(image_path)
+    # Wczytanie obrazu
+    image = cv2.imread(
+        image_path
+    )
 
     if image is None:
-        print(f"[WARNING] Nie można wczytać: {image_path}")
+
+        print(
+            f"[WARNING] Nie można wczytać: "
+            f"{image_path}"
+        )
+
         continue
 
+
+    # Zmiana rozmiaru
     image = cv2.resize(
         image,
-        (INPUT_SHAPE[1], INPUT_SHAPE[0])
+        (
+            INPUT_SHAPE[1],
+            INPUT_SHAPE[0]
+        )
     )
 
-    # OpenCV używa BGR.
-    # Konwertujemy do standardowego RGB.
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-    data.append(image)
+    # OpenCV wczytuje obrazy jako BGR.
+    # Konwertujemy do RGB.
+    image = cv2.cvtColor(
+        image,
+        cv2.COLOR_BGR2RGB
+    )
 
-    # np.
+
+    # Dodanie obrazu do danych
+    data.append(
+        image
+    )
+
+
+    # -----------------------------------------------------
+    # Pobranie etykiet z nazwy katalogu
+    #
+    # przykład:
+    #
     # downloads/black_trousers/0001.jpg
     #
-    # parent_dir -> black_trousers
+    # katalog:
+    # black_trousers
+    #
+    # etykiety:
+    # ["black", "trousers"]
+    # -----------------------------------------------------
 
     parent_dir = os.path.basename(
-        os.path.dirname(image_path)
+        os.path.dirname(
+            image_path
+        )
     )
 
-    label = parent_dir.split("_")
 
-    labels.append(label)
+    label = parent_dir.split(
+        "_"
+    )
 
-# NumPy + normalizacja
-data = np.asarray(data, dtype="float32") / 255.0
+
+    labels.append(
+        label
+    )
+
+
+# ---------------------------------------------------------
+# Kontrola danych
+# ---------------------------------------------------------
+
+if len(data) == 0:
+    raise ValueError(
+        "Nie udało się wczytać żadnego obrazu."
+    )
+
+
+# ---------------------------------------------------------
+# Konwersja do NumPy + normalizacja
+# ---------------------------------------------------------
+
+data = np.asarray(
+    data,
+    dtype="float32"
+)
+
+
+data = data / 255.0
+
 
 print(
-    f"[INFO] {len(data)} obrazów o rozmiarze: "
+    f"[INFO] {len(data)} obrazów "
+    f"o rozmiarze: "
     f"{data.nbytes / (1024 * 1024):.2f} MB"
 )
 
-print(f"[INFO] Kształt danych: {data.shape}")
 
+print(
+    f"[INFO] Kształt danych: "
+    f"{data.shape}"
+)
+
+
+# ---------------------------------------------------------
 # Binaryzacja etykiet
-print("[INFO] Binaryzacja etykiet...")
+# ---------------------------------------------------------
+
+print(
+    "[INFO] Binaryzacja etykiet..."
+)
+
 
 mlb = MultiLabelBinarizer()
 
-labels = mlb.fit_transform(labels)
 
-print(f"[INFO] Etykiety: {mlb.classes_}")
+labels = mlb.fit_transform(
+    labels
+)
 
+
+print(
+    f"[INFO] Etykiety: "
+    f"{mlb.classes_}"
+)
+
+
+print(
+    f"[INFO] Liczba klas: "
+    f"{len(mlb.classes_)}"
+)
+
+
+# ---------------------------------------------------------
 # Eksport MultiLabelBinarizer
-print("[INFO] Eksport etykiet do pliku...")
+# ---------------------------------------------------------
 
-with open("output/mlb.pickle", "wb") as file:
-    pickle.dump(mlb, file)
+print(
+    "[INFO] Eksport etykiet do pliku..."
+)
 
-# Train / Test
-print("[INFO] Podział na zbiór treningowy i testowy...")
+
+with open(
+    "output/mlb.pickle",
+    "wb"
+) as file:
+
+    pickle.dump(
+        mlb,
+        file
+    )
+
+
+# ---------------------------------------------------------
+# Podział Train / Test
+# ---------------------------------------------------------
+
+print(
+    "[INFO] Podział na zbiór treningowy "
+    "i testowy..."
+)
+
 
 X_train, X_test, y_train, y_test = train_test_split(
     data,
@@ -194,104 +399,218 @@ X_train, X_test, y_train, y_test = train_test_split(
     random_state=10
 )
 
+
 print(
     f"[INFO] Rozmiar danych treningowych: "
     f"{X_train.shape}"
 )
+
+
+print(
+    f"[INFO] Rozmiar etykiet treningowych: "
+    f"{y_train.shape}"
+)
+
 
 print(
     f"[INFO] Rozmiar danych testowych: "
     f"{X_test.shape}"
 )
 
-# Augmentacja Keras 3
-print("[INFO] Budowa augmentacji...")
+
+print(
+    f"[INFO] Rozmiar etykiet testowych: "
+    f"{y_test.shape}"
+)
+
+
+# ---------------------------------------------------------
+# Augmentacja danych - Keras 3
+# ---------------------------------------------------------
+
+print(
+    "[INFO] Budowa augmentacji..."
+)
+
 
 data_augmentation = keras.Sequential(
     [
+
+        # Obrót do około +/- 30 stopni
         keras.layers.RandomRotation(
             factor=30 / 360,
             fill_mode="nearest"
         ),
 
+        # Przesunięcie obrazu
         keras.layers.RandomTranslation(
             height_factor=0.2,
             width_factor=0.2,
             fill_mode="nearest"
         ),
 
+        # Shear
         keras.layers.RandomShear(
-            x_factor=np.tan(np.deg2rad(0.2)),
+            x_factor=np.tan(
+                np.deg2rad(0.2)
+            ),
             fill_mode="nearest"
         ),
 
+        # Zoom
         keras.layers.RandomZoom(
             height_factor=(-0.2, 0.2),
             width_factor=(-0.2, 0.2),
             fill_mode="nearest"
         ),
 
-        keras.layers.RandomFlip("horizontal"),
+        # Odbicie poziome
+        keras.layers.RandomFlip(
+            "horizontal"
+        ),
+
     ],
     name="data_augmentation"
 )
 
-# Model
-print("[INFO] Budowa modelu...")
+
+# ---------------------------------------------------------
+# Budowa modelu
+# ---------------------------------------------------------
+
+print(
+    "[INFO] Budowa modelu..."
+)
+
 
 architecture = models.VGGNetSmall(
     input_shape=INPUT_SHAPE,
-    num_classes=len(mlb.classes_),
+    num_classes=len(
+        mlb.classes_
+    ),
     final_activation="sigmoid"
 )
+
 
 base_model = architecture.build()
 
 
-# Augmentację umieszczamy przed właściwą siecią
-inputs = keras.Input(shape=INPUT_SHAPE)
+# ---------------------------------------------------------
+# Dodanie augmentacji przed właściwą siecią CNN
+# ---------------------------------------------------------
 
-x = data_augmentation(inputs)
+inputs = keras.Input(
+    shape=INPUT_SHAPE,
+    name="input_image"
+)
 
-outputs = base_model(x)
+
+x = data_augmentation(
+    inputs
+)
+
+
+outputs = base_model(
+    x
+)
+
 
 model = keras.Model(
     inputs=inputs,
-    outputs=outputs
+    outputs=outputs,
+    name="VGGNetSmall_MultiLabel"
 )
+
+
+# ---------------------------------------------------------
+# Podsumowanie modelu
+# ---------------------------------------------------------
 
 model.summary()
 
+
+# ---------------------------------------------------------
 # Kompilacja
+# ---------------------------------------------------------
+
+print(
+    "[INFO] Kompilacja modelu..."
+)
+
+
 model.compile(
+
     optimizer=Adam(
         learning_rate=LEARNING_RATE
     ),
+
     loss="binary_crossentropy",
-    metrics=["accuracy"]
+
+    metrics=[
+
+        keras.metrics.BinaryAccuracy(
+            name="binary_accuracy",
+            threshold=0.5
+        ),
+
+        keras.metrics.Precision(
+            name="precision",
+            thresholds=0.5
+        ),
+
+        keras.metrics.Recall(
+            name="recall",
+            thresholds=0.5
+        )
+
+    ]
 )
 
-# Checkpoint
+
+# ---------------------------------------------------------
+# Nazwa modelu
+# ---------------------------------------------------------
+
 dt = datetime.now().strftime(
     "%d_%m_%Y_%H_%M"
 )
 
+
 filepath = os.path.join(
     "output",
-    "model_" + dt + ".keras"
+    f"model_{dt}.keras"
 )
+
+
+# ---------------------------------------------------------
+# Checkpoint
+# ---------------------------------------------------------
 
 checkpoint = ModelCheckpoint(
+
     filepath=filepath,
-    monitor="val_accuracy",
+
+    monitor="val_binary_accuracy",
+
     mode="max",
-    save_best_only=True
+
+    save_best_only=True,
+
+    verbose=1
 )
 
+
+# ---------------------------------------------------------
 # Trening
-print("[INFO] Trenowanie modelu...")
+# ---------------------------------------------------------
+
+print(
+    "[INFO] Trenowanie modelu..."
+)
+
 
 history = model.fit(
+
     X_train,
     y_train,
 
@@ -301,6 +620,7 @@ history = model.fit(
     ),
 
     epochs=EPOCHS,
+
     batch_size=BATCH_SIZE,
 
     callbacks=[
@@ -310,20 +630,44 @@ history = model.fit(
     shuffle=True
 )
 
-# Raport
+
+# ---------------------------------------------------------
+# Wyniki końcowe
+# ---------------------------------------------------------
+
+print(
+    "[INFO] Trening zakończony."
+)
+
+
+print(
+    f"[INFO] Najlepszy model zapisany jako: "
+    f"{filepath}"
+)
+
+
+# ---------------------------------------------------------
+# Raport HTML
+# ---------------------------------------------------------
+
 filename = os.path.join(
     "output",
-    "report_" + dt + ".html"
+    f"report_{dt}.html"
 )
+
 
 print(
     f"[INFO] Eksport wykresu do pliku "
     f"{filename}..."
 )
 
+
 plot_hist(
     history,
     filename=filename
 )
 
-print("[INFO] Koniec")
+
+print(
+    "[INFO] Koniec"
+)
