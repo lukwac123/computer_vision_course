@@ -26,3 +26,13 @@ Celem kursu jest wprowadzenie do zagadnień związanych z widzeniem komputerowym
 - Podstawy rozpoznawania obiektów
 
 ### Projekt edukacyjny realizowany w ramach kursu Udemy.
+
+### Object Detection YOLO ver 3
+
+Przykładowe zdjęcia do ternowania modelu:
+<b>- COCO - Common Object in Context</b>
+http://cocodataset.org/
+
+<b>- IMAGENET</b>
+http://www.image-net.org/
+
