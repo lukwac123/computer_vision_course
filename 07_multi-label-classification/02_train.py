@@ -451,9 +451,11 @@ data_augmentation = keras.Sequential(
 
         # Shear
         keras.layers.RandomShear(
-            x_factor=np.tan(
-                np.deg2rad(0.2)
+            x_factor=(
+                0.0,
+                np.tan(np.deg2rad(0.2))
             ),
+            y_factor=(0.0, 0.0),
             fill_mode="nearest"
         ),
 
