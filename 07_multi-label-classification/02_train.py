@@ -27,9 +27,10 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 
 # ---------------------------------------------------------
-# Keras
+# Keras & TensorFlow
 # ---------------------------------------------------------
 
+import tensorflow as tf
 import keras
 
 from keras.callbacks import ModelCheckpoint
@@ -48,15 +49,16 @@ def plot_hist(history, filename):
     hist["epoch"] = history.epoch
 
     fig = make_subplots(
-        rows=2,
+        rows=3,
         cols=1,
         subplot_titles=(
             "Binary Accuracy",
+            "F1 Score (Macro)",
             "Loss"
         )
     )
 
-    # Accuracy - trening
+    # Accuracy - trening & walidacja
     fig.add_trace(
         go.Scatter(
             x=hist["epoch"],
@@ -68,19 +70,43 @@ def plot_hist(history, filename):
         col=1
     )
 
-    # Accuracy - walidacja
-    fig.add_trace(
-        go.Scatter(
-            x=hist["epoch"],
-            y=hist["val_binary_accuracy"],
-            name="valid_binary_accuracy",
-            mode="markers+lines"
-        ),
-        row=1,
-        col=1
-    )
+    if "val_binary_accuracy" in hist.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=hist["epoch"],
+                y=hist["val_binary_accuracy"],
+                name="valid_binary_accuracy",
+                mode="markers+lines"
+            ),
+            row=1,
+            col=1
+        )
 
-    # Loss - trening
+    # F1 Macro - trening & walidacja
+    if "f1_macro" in hist.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=hist["epoch"],
+                y=hist["f1_macro"],
+                name="train_f1_macro",
+                mode="markers+lines"
+            ),
+            row=2,
+            col=1
+        )
+    if "val_f1_macro" in hist.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=hist["epoch"],
+                y=hist["val_f1_macro"],
+                name="valid_f1_macro",
+                mode="markers+lines"
+            ),
+            row=2,
+            col=1
+        )
+
+    # Loss - trening & walidacja
     fig.add_trace(
         go.Scatter(
             x=hist["epoch"],
@@ -88,49 +114,33 @@ def plot_hist(history, filename):
             name="train_loss",
             mode="markers+lines"
         ),
-        row=2,
+        row=3,
         col=1
     )
 
-    # Loss - walidacja
-    fig.add_trace(
-        go.Scatter(
-            x=hist["epoch"],
-            y=hist["val_loss"],
-            name="valid_loss",
-            mode="markers+lines"
-        ),
-        row=2,
-        col=1
-    )
+    if "val_loss" in hist.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=hist["epoch"],
+                y=hist["val_loss"],
+                name="valid_loss",
+                mode="markers+lines"
+            ),
+            row=3,
+            col=1
+        )
 
-    fig.update_xaxes(
-        title_text="Liczba epok",
-        row=1,
-        col=1
-    )
+    fig.update_xaxes(title_text="Liczba epok", row=1, col=1)
+    fig.update_xaxes(title_text="Liczba epok", row=2, col=1)
+    fig.update_xaxes(title_text="Liczba epok", row=3, col=1)
 
-    fig.update_xaxes(
-        title_text="Liczba epok",
-        row=2,
-        col=1
-    )
-
-    fig.update_yaxes(
-        title_text="Binary Accuracy",
-        row=1,
-        col=1
-    )
-
-    fig.update_yaxes(
-        title_text="Loss",
-        row=2,
-        col=1
-    )
+    fig.update_yaxes(title_text="Binary Accuracy", row=1, col=1)
+    fig.update_yaxes(title_text="F1 Macro", row=2, col=1)
+    fig.update_yaxes(title_text="Loss", row=3, col=1)
 
     fig.update_layout(
         width=1400,
-        height=1000,
+        height=1200,
         title="Training Metrics"
     )
 
@@ -166,6 +176,14 @@ ap.add_argument(
     help="liczba epok"
 )
 
+ap.add_argument(
+    "-m",
+    "--model-type",
+    default="mobilenet",
+    choices=["mobilenet", "vgg"],
+    help="typ modelu: 'mobilenet' (Transfer Learning) lub 'vgg' (ulepszona mała sieć z BN)"
+)
+
 args = vars(ap.parse_args())
 
 
@@ -174,9 +192,7 @@ args = vars(ap.parse_args())
 # ---------------------------------------------------------
 
 EPOCHS = args["epochs"]
-
 LEARNING_RATE = 0.001
-
 BATCH_SIZE = 32
 
 INPUT_SHAPE = (
@@ -202,99 +218,49 @@ os.makedirs(
 
 print("[INFO] Wczytywanie danych...")
 
-
 image_paths = list(
     paths.list_images(
         args["images"]
     )
 )
 
-
 if len(image_paths) == 0:
     raise ValueError(
         f"Nie znaleziono obrazów w katalogu: {args['images']}"
     )
 
-
 np.random.shuffle(
     image_paths
 )
 
-
 data = []
 labels = []
 
-
 for image_path in image_paths:
-
-    # Wczytanie obrazu
-    image = cv2.imread(
-        image_path
-    )
+    image = cv2.imread(image_path)
 
     if image is None:
-
-        print(
-            f"[WARNING] Nie można wczytać: "
-            f"{image_path}"
-        )
-
+        print(f"[WARNING] Nie można wczytać: {image_path}")
         continue
 
-
-    # Zmiana rozmiaru
     image = cv2.resize(
         image,
-        (
-            INPUT_SHAPE[1],
-            INPUT_SHAPE[0]
-        )
+        (INPUT_SHAPE[1], INPUT_SHAPE[0])
     )
 
-
-    # OpenCV wczytuje obrazy jako BGR.
-    # Konwertujemy do RGB.
     image = cv2.cvtColor(
         image,
         cv2.COLOR_BGR2RGB
     )
 
-
-    # Dodanie obrazu do danych
-    data.append(
-        image
-    )
-
-
-    # -----------------------------------------------------
-    # Pobranie etykiet z nazwy katalogu
-    #
-    # przykład:
-    #
-    # downloads/black_trousers/0001.jpg
-    #
-    # katalog:
-    # black_trousers
-    #
-    # etykiety:
-    # ["black", "trousers"]
-    # -----------------------------------------------------
+    data.append(image)
 
     parent_dir = os.path.basename(
-        os.path.dirname(
-            image_path
-        )
+        os.path.dirname(image_path)
     )
 
-
-    label = parent_dir.split(
-        "_"
-    )
-
-
-    labels.append(
-        label
-    )
+    label = parent_dir.split("_")
+    labels.append(label)
 
 
 # ---------------------------------------------------------
@@ -311,86 +277,40 @@ if len(data) == 0:
 # Konwersja do NumPy + normalizacja
 # ---------------------------------------------------------
 
-data = np.asarray(
-    data,
-    dtype="float32"
-)
+data = np.asarray(data, dtype="float32") / 255.0
 
-
-data = data / 255.0
-
-
-print(
-    f"[INFO] {len(data)} obrazów "
-    f"o rozmiarze: "
-    f"{data.nbytes / (1024 * 1024):.2f} MB"
-)
-
-
-print(
-    f"[INFO] Kształt danych: "
-    f"{data.shape}"
-)
+print(f"[INFO] {len(data)} obrazów o rozmiarze: {data.nbytes / (1024 * 1024):.2f} MB")
+print(f"[INFO] Kształt danych: {data.shape}")
 
 
 # ---------------------------------------------------------
 # Binaryzacja etykiet
 # ---------------------------------------------------------
 
-print(
-    "[INFO] Binaryzacja etykiet..."
-)
-
+print("[INFO] Binaryzacja etykiet...")
 
 mlb = MultiLabelBinarizer()
+labels = mlb.fit_transform(labels)
 
-
-labels = mlb.fit_transform(
-    labels
-)
-
-
-print(
-    f"[INFO] Etykiety: "
-    f"{mlb.classes_}"
-)
-
-
-print(
-    f"[INFO] Liczba klas: "
-    f"{len(mlb.classes_)}"
-)
+print(f"[INFO] Etykiety: {mlb.classes_}")
+print(f"[INFO] Liczba klas: {len(mlb.classes_)}")
 
 
 # ---------------------------------------------------------
 # Eksport MultiLabelBinarizer
 # ---------------------------------------------------------
 
-print(
-    "[INFO] Eksport etykiet do pliku..."
-)
+print("[INFO] Eksport etykiet do pliku...")
 
-
-with open(
-    "output/mlb.pickle",
-    "wb"
-) as file:
-
-    pickle.dump(
-        mlb,
-        file
-    )
+with open("output/mlb.pickle", "wb") as file:
+    pickle.dump(mlb, file)
 
 
 # ---------------------------------------------------------
 # Podział Train / Test
 # ---------------------------------------------------------
 
-print(
-    "[INFO] Podział na zbiór treningowy "
-    "i testowy..."
-)
-
+print("[INFO] Podział na zbiór treningowy i testowy...")
 
 X_train, X_test, y_train, y_test = train_test_split(
     data,
@@ -399,78 +319,53 @@ X_train, X_test, y_train, y_test = train_test_split(
     random_state=10
 )
 
-
-print(
-    f"[INFO] Rozmiar danych treningowych: "
-    f"{X_train.shape}"
-)
-
-
-print(
-    f"[INFO] Rozmiar etykiet treningowych: "
-    f"{y_train.shape}"
-)
-
-
-print(
-    f"[INFO] Rozmiar danych testowych: "
-    f"{X_test.shape}"
-)
-
-
-print(
-    f"[INFO] Rozmiar etykiet testowych: "
-    f"{y_test.shape}"
-)
+print(f"[INFO] Rozmiar danych treningowych: {X_train.shape}")
+print(f"[INFO] Rozmiar etykiet treningowych: {y_train.shape}")
+print(f"[INFO] Rozmiar danych testowych: {X_test.shape}")
+print(f"[INFO] Rozmiar etykiet testowych: {y_test.shape}")
 
 
 # ---------------------------------------------------------
-# Augmentacja danych - Keras 3
+# Tworzenie pipeline'u tf.data.Dataset
 # ---------------------------------------------------------
 
-print(
-    "[INFO] Budowa augmentacji..."
-)
+print("[INFO] Budowanie pipeline'u tf.data.Dataset...")
 
+train_ds = tf.data.Dataset.from_tensor_slices((X_train, y_train))
+train_ds = train_ds.shuffle(buffer_size=len(X_train)).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+
+val_ds = tf.data.Dataset.from_tensor_slices((X_test, y_test))
+val_ds = val_ds.batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+
+
+# ---------------------------------------------------------
+# Augmentacja danych - Keras 3 (Poprawiona)
+# ---------------------------------------------------------
+
+print("[INFO] Budowa augmentacji...")
 
 data_augmentation = keras.Sequential(
     [
-
-        # Obrót do około +/- 30 stopni
         keras.layers.RandomRotation(
             factor=30 / 360,
             fill_mode="nearest"
         ),
-
-        # Przesunięcie obrazu
         keras.layers.RandomTranslation(
             height_factor=0.2,
             width_factor=0.2,
             fill_mode="nearest"
         ),
-
-        # Shear
         keras.layers.RandomShear(
-            x_factor=(
-                0.0,
-                np.tan(np.deg2rad(0.2))
-            ),
-            y_factor=(0.0, 0.0),
+            x_factor=(0.0, 0.1),
+            y_factor=(0.0, 0.1),
             fill_mode="nearest"
         ),
-
-        # Zoom
         keras.layers.RandomZoom(
-            height_factor=(-0.2, 0.2),
-            width_factor=(-0.2, 0.2),
+            height_factor=(-0.15, 0.15),
+            width_factor=(-0.15, 0.15),
             fill_mode="nearest"
         ),
-
-        # Odbicie poziome
-        keras.layers.RandomFlip(
-            "horizontal"
-        ),
-
+        keras.layers.RandomFlip("horizontal"),
     ],
     name="data_augmentation"
 )
@@ -480,25 +375,27 @@ data_augmentation = keras.Sequential(
 # Budowa modelu
 # ---------------------------------------------------------
 
-print(
-    "[INFO] Budowa modelu..."
-)
+print(f"[INFO] Budowa modelu (typ: {args['model_type']})...")
 
-
-architecture = models.VGGNetSmall(
-    input_shape=INPUT_SHAPE,
-    num_classes=len(
-        mlb.classes_
-    ),
-    final_activation="sigmoid"
-)
-
+if args["model_type"] == "mobilenet":
+    architecture = models.MobileNetV3Transfer(
+        input_shape=INPUT_SHAPE,
+        num_classes=len(mlb.classes_),
+        final_activation="sigmoid",
+        trainable=False
+    )
+else:
+    architecture = models.VGGNetSmall(
+        input_shape=INPUT_SHAPE,
+        num_classes=len(mlb.classes_),
+        final_activation="sigmoid"
+    )
 
 base_model = architecture.build()
 
 
 # ---------------------------------------------------------
-# Dodanie augmentacji przed właściwą siecią CNN
+# Dodanie augmentacji przed właściwym siecią
 # ---------------------------------------------------------
 
 inputs = keras.Input(
@@ -506,21 +403,13 @@ inputs = keras.Input(
     name="input_image"
 )
 
-
-x = data_augmentation(
-    inputs
-)
-
-
-outputs = base_model(
-    x
-)
-
+x = data_augmentation(inputs)
+outputs = base_model(x)
 
 model = keras.Model(
     inputs=inputs,
     outputs=outputs,
-    name="VGGNetSmall_MultiLabel"
+    name=f"MultiLabel_{args['model_type']}"
 )
 
 
@@ -535,69 +424,33 @@ model.summary()
 # Kompilacja
 # ---------------------------------------------------------
 
-print(
-    "[INFO] Kompilacja modelu..."
-)
-
+print("[INFO] Kompilacja modelu...")
 
 model.compile(
-
-    optimizer=Adam(
-        learning_rate=LEARNING_RATE
-    ),
-
+    optimizer=Adam(learning_rate=LEARNING_RATE),
     loss="binary_crossentropy",
-
     metrics=[
-
-        keras.metrics.BinaryAccuracy(
-            name="binary_accuracy",
-            threshold=0.5
-        ),
-
-        keras.metrics.Precision(
-            name="precision",
-            thresholds=0.5
-        ),
-
-        keras.metrics.Recall(
-            name="recall",
-            thresholds=0.5
-        )
-
+        keras.metrics.BinaryAccuracy(name="binary_accuracy", threshold=0.5),
+        keras.metrics.Precision(name="precision", thresholds=0.5),
+        keras.metrics.Recall(name="recall", thresholds=0.5),
+        keras.metrics.F1Score(average="macro", threshold=0.5, name="f1_macro"),
+        keras.metrics.F1Score(average="micro", threshold=0.5, name="f1_micro"),
     ]
 )
 
 
 # ---------------------------------------------------------
-# Nazwa modelu
+# Nazwa modelu i Checkpoint
 # ---------------------------------------------------------
 
-dt = datetime.now().strftime(
-    "%d_%m_%Y_%H_%M"
-)
-
-
-filepath = os.path.join(
-    "output",
-    f"model_{dt}.keras"
-)
-
-
-# ---------------------------------------------------------
-# Checkpoint
-# ---------------------------------------------------------
+dt = datetime.now().strftime("%d_%m_%Y_%H_%M")
+filepath = os.path.join("output", f"model_{dt}.keras")
 
 checkpoint = ModelCheckpoint(
-
     filepath=filepath,
-
-    monitor="val_binary_accuracy",
-
+    monitor="val_f1_macro",
     mode="max",
-
     save_best_only=True,
-
     verbose=1
 )
 
@@ -606,30 +459,13 @@ checkpoint = ModelCheckpoint(
 # Trening
 # ---------------------------------------------------------
 
-print(
-    "[INFO] Trenowanie modelu..."
-)
-
+print("[INFO] Trenowanie modelu...")
 
 history = model.fit(
-
-    X_train,
-    y_train,
-
-    validation_data=(
-        X_test,
-        y_test
-    ),
-
+    train_ds,
+    validation_data=val_ds,
     epochs=EPOCHS,
-
-    batch_size=BATCH_SIZE,
-
-    callbacks=[
-        checkpoint
-    ],
-
-    shuffle=True
+    callbacks=[checkpoint]
 )
 
 
@@ -637,39 +473,17 @@ history = model.fit(
 # Wyniki końcowe
 # ---------------------------------------------------------
 
-print(
-    "[INFO] Trening zakończony."
-)
-
-
-print(
-    f"[INFO] Najlepszy model zapisany jako: "
-    f"{filepath}"
-)
+print("[INFO] Trening zakończony.")
+print(f"[INFO] Najlepszy model zapisany jako: {filepath}")
 
 
 # ---------------------------------------------------------
 # Raport HTML
 # ---------------------------------------------------------
 
-filename = os.path.join(
-    "output",
-    f"report_{dt}.html"
-)
+filename = os.path.join("output", f"report_{dt}.html")
+print(f"[INFO] Eksport wykresu do pliku {filename}...")
 
+plot_hist(history, filename=filename)
 
-print(
-    f"[INFO] Eksport wykresu do pliku "
-    f"{filename}..."
-)
-
-
-plot_hist(
-    history,
-    filename=filename
-)
-
-
-print(
-    "[INFO] Koniec"
-)
+print("[INFO] Koniec")
